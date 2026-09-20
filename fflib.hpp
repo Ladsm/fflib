@@ -53,6 +53,16 @@ SOFTWARE.
 #include <ctime>
 #include <iomanip>
 #include <format>
+#include <cstdlib>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <shlobj.h>
+#else
+#include <unistd.h>
+#include <sys/types.h>
+#include <pwd.h>
+#endif
 
 namespace fflib {
     namespace fs = std::filesystem;
@@ -312,7 +322,56 @@ namespace fflib {
         }
         return p.string();
     }
-
+    inline fs::path get_appdata_dir(std::string_view app_name = "") {
+        fs::path base_path;
+#ifdef _WIN32
+        PWSTR pszPath = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, NULL, &pszPath))) {
+            base_path = fs::path(pszPath);
+            CoTaskMemFree(pszPath);
+        }
+#elif defined(__APPLE__)
+        const char* home = std::getenv("HOME");
+        if (!home) {
+            if (auto* pw = getpwuid(getuid())) home = pw->pw_dir;
+        }
+        if (home) {
+            base_path = fs::path(home) / "Library" / "Application Support";
+        }
+#else
+        const char* xdg_data = std::getenv("XDG_DATA_HOME");
+        if (xdg_data && *xdg_data) {
+            base_path = fs::path(xdg_data);
+        }
+        else {
+            const char* home = std::getenv("HOME");
+            if (!home) {
+                if (auto* pw = getpwuid(getuid())) home = pw->pw_dir;
+            }
+            if (home) {
+                base_path = fs::path(home) / ".local" / "share";
+            }
+        }
+#endif
+        if (!app_name.empty()) {
+            base_path /= app_name;
+        }
+        return base_path;
+    }
+    inline bool create_appdata_file(const fs::path& relative_path, std::string_view content) {
+        fs::path full_path = get_appdata_dir() / relative_path;
+        if (full_path.has_parent_path()) {
+            if (!create_folder(full_path.parent_path())) {
+                debug_log(std::format("Failed to ensure appdata directory structure: {}", full_path.parent_path().string()));
+                return false;
+            }
+        }
+        return create_file(full_path, content);
+    }
+    inline std::string read_appdata_file(const fs::path& relative_path) {
+        fs::path full_path = get_appdata_dir() / relative_path;
+        return get_file_contents(full_path);
+    }
 }
 
 /*
